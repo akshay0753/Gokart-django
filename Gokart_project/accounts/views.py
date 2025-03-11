@@ -4,7 +4,8 @@ from .forms import RegistrationForm
 from django.contrib import messages, auth
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
-
+from carts.views import _cart_id
+from carts.models import CartItem, Cart
 #Verification email
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
@@ -12,7 +13,8 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMessage
-
+import requests
+import urllib.parse
 # Create your views here.
 def register(request):
     if request.method == "POST":
@@ -55,21 +57,61 @@ def register(request):
     }
     return render(request, "accounts/register.html", context)
 
+from django.shortcuts import render, redirect
+from django.contrib import messages, auth
+from carts.models import Cart, CartItem
+from carts.views import _cart_id
+
 def login(request):
     if request.method == "POST":
         email = request.POST.get('email')
-        print(email)
         password = request.POST.get('password')
-        print(password)
-        user = auth.authenticate(email=email, password=password)
-        print(user)
+        user = auth.authenticate(email=email, password=password)  # Ensure custom user model supports email auth
+        
         if user is not None:
+            try:
+                cart = Cart.objects.get(cart_id=_cart_id(request))
+                cart_items = CartItem.objects.filter(cart=cart)
+
+                if cart_items.exists():
+                    # Getting the product variations by cart id
+                    product_variation_list = [list(item.variation.all()) for item in cart_items]
+
+                    # Get the cart items from user to access his product variations.
+                    user_cart_items = CartItem.objects.filter(user=user)
+                    existing_variation_list = [list(item.variation.all()) for item in user_cart_items]
+                    item_id_map = {item.id: variations for item, variations in zip(user_cart_items, existing_variation_list)}
+
+                    for variations in product_variation_list:
+                        if variations in existing_variation_list:
+                            item_id = list(item_id_map.keys())[existing_variation_list.index(variations)]
+                            existing_item = CartItem.objects.get(id=item_id)
+                            existing_item.quantity += 1
+                            existing_item.user = user
+                            existing_item.save()
+                        else:
+                            for item in cart_items:
+                                item.user = user
+                                item.save()
+
+            except Cart.DoesNotExist:
+                pass  # Log this if necessary
+
             auth.login(request, user)
             messages.success(request, "You are now logged in.")
-            return redirect('dashboard')
-        else:
-            messages.error(request, "Invalid credentials")
-            return redirect('login')        
+            url = request.META.get('HTTP_REFERER')
+            if url:
+                parsed_url = urllib.parse.urlparse(url)
+                query_params = urllib.parse.parse_qs(parsed_url.query)  # Properly parse query parameters
+
+                if 'next' in query_params:
+                    next_page = query_params['next'][0]  # Extract the first value
+                    return redirect(next_page)
+
+    else:
+        messages.error(request, "Invalid credentials")
+        return redirect('login')        
+
     return render(request, "accounts/login.html")
 
 
