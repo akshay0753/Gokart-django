@@ -63,56 +63,68 @@ from carts.models import Cart, CartItem
 from carts.views import _cart_id
 
 def login(request):
-    if request.method == "POST":
-        email = request.POST.get('email')
-        password = request.POST.get('password')
-        user = auth.authenticate(email=email, password=password)  # Ensure custom user model supports email auth
-        
+    if request.method == 'POST':
+        email = request.POST['email']
+        password = request.POST['password']
+
+        user = auth.authenticate(email=email, password=password)
+
         if user is not None:
             try:
                 cart = Cart.objects.get(cart_id=_cart_id(request))
-                cart_items = CartItem.objects.filter(cart=cart)
+                is_cart_item_exists = CartItem.objects.filter(cart=cart).exists()
+                if is_cart_item_exists:
+                    cart_item = CartItem.objects.filter(cart=cart)
 
-                if cart_items.exists():
                     # Getting the product variations by cart id
-                    product_variation_list = [list(item.variation.all()) for item in cart_items]
+                    product_variation = []
+                    for item in cart_item:
+                        variation = item.variations.all()
+                        product_variation.append(list(variation))
 
-                    # Get the cart items from user to access his product variations.
-                    user_cart_items = CartItem.objects.filter(user=user)
-                    existing_variation_list = [list(item.variation.all()) for item in user_cart_items]
-                    item_id_map = {item.id: variations for item, variations in zip(user_cart_items, existing_variation_list)}
+                    # Get the cart items from the user to access his product variations
+                    cart_item = CartItem.objects.filter(user=user)
+                    ex_var_list = []
+                    id = []
+                    for item in cart_item:
+                        existing_variation = item.variations.all()
+                        ex_var_list.append(list(existing_variation))
+                        id.append(item.id)
 
-                    for variations in product_variation_list:
-                        if variations in existing_variation_list:
-                            item_id = list(item_id_map.keys())[existing_variation_list.index(variations)]
-                            existing_item = CartItem.objects.get(id=item_id)
-                            existing_item.quantity += 1
-                            existing_item.user = user
-                            existing_item.save()
+                    # product_variation = [1, 2, 3, 4, 6]
+                    # ex_var_list = [4, 6, 3, 5]
+
+                    for pr in product_variation:
+                        if pr in ex_var_list:
+                            index = ex_var_list.index(pr)
+                            item_id = id[index]
+                            item = CartItem.objects.get(id=item_id)
+                            item.quantity += 1
+                            item.user = user
+                            item.save()
                         else:
-                            for item in cart_items:
+                            cart_item = CartItem.objects.filter(cart=cart)
+                            for item in cart_item:
                                 item.user = user
                                 item.save()
-
-            except Cart.DoesNotExist:
-                pass  # Log this if necessary
-
+            except:
+                pass
             auth.login(request, user)
-            messages.success(request, "You are now logged in.")
+            messages.success(request, 'You are now logged in.')
             url = request.META.get('HTTP_REFERER')
-            if url:
-                parsed_url = urllib.parse.urlparse(url)
-                query_params = urllib.parse.parse_qs(parsed_url.query)  # Properly parse query parameters
-
-                if 'next' in query_params:
-                    next_page = query_params['next'][0]  # Extract the first value
-                    return redirect(next_page)
-
-    else:
-        messages.error(request, "Invalid credentials")
-        return redirect('login')        
-
-    return render(request, "accounts/login.html")
+            try:
+                query = requests.utils.urlparse(url).query
+                # next=/cart/checkout/
+                params = dict(x.split('=') for x in query.split('&'))
+                if 'next' in params:
+                    nextPage = params['next']
+                    return redirect(nextPage)
+            except:
+                return redirect('dashboard')
+        else:
+            messages.error(request, 'Invalid login credentials')
+            return redirect('login')
+    return render(request, 'accounts/login.html')
 
 
 @login_required(login_url='login')
